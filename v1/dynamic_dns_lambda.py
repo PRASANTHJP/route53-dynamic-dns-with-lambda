@@ -35,12 +35,10 @@ def read_s3_config():
 
     # Download the config to /tmp
     s3_client.download_file(
-        config_s3_bucket,
-        config_s3_key,
-        '/tmp/%s' % config_s3_key
+        config_s3_bucket, config_s3_key, f'/tmp/{config_s3_key}'
     )
     # Open the config and return the json as a dictionary.
-    full_config = (open('/tmp/%s' % config_s3_key).read())
+    full_config = open(f'/tmp/{config_s3_key}').read()
     return json.loads(full_config)
 
 
@@ -82,13 +80,12 @@ def route53_client(execution_mode, aws_region, route_53_zone_id,
             if eachRecord['Name'] == route_53_record_name:
                 # If there's a single record, pass it along.
                 if len(eachRecord['ResourceRecords']) == 1:
+                    return_status = 'success'
                     for eachSubRecord in eachRecord['ResourceRecords']:
                         currentroute53_ip = eachSubRecord['Value']
-                        return_status = 'success'
                         return_message = currentroute53_ip
                         return {'return_status': return_status,
                                 'return_message': return_message}
-                # Error out if there is more than one value for the record set.
                 elif len(eachRecord['ResourceRecords']) > 1:
                     return_status = 'fail'
                     return_message = 'You should only have a single value for'\
@@ -139,10 +136,7 @@ def run_set_mode(set_hostname, validation_hash, source_ip, internal_ip):
                 'return_message': return_message}
     # Check if internal_ip was set
 	# Comment out the following 4 lines to disable internal IP
-    if internal_ip == "":
-        set_ip = source_ip
-    else:
-        set_ip = internal_ip
+    set_ip = source_ip if internal_ip == "" else internal_ip
     # Get the section of the config related to the requested hostname.
     record_config_set = full_config[set_hostname]
     aws_region = record_config_set['aws_region']
@@ -169,13 +163,9 @@ def run_set_mode(set_hostname, validation_hash, source_ip, internal_ip):
     # Compare the validation_hash from the client to the
     # calculated_hash.
     # If they don't match, error out.
-    if not calculated_hash == validation_hash:
+    if calculated_hash != validation_hash:
         return_status = 'fail'
         return_message = 'Validation hashes do not match.'
-        return {'return_status': return_status,
-                'return_message': return_message}
-    # If they do match, get the current ip address associated with
-    # the hostname DNS record from Route 53.
     else:
         route53_get_response = route53_client(
             'get_record',
@@ -200,13 +190,8 @@ def run_set_mode(set_hostname, validation_hash, source_ip, internal_ip):
         # If the client's current IP matches the current DNS record
         # in Route 53 there is nothing left to do.
         if route53_ip == set_ip:
-            return_status = 'success'
             return_message = 'Your IP address matches '\
                 'the current Route53 DNS record.'
-            return {'return_status': return_status,
-                    'return_message': return_message}
-        # If the IP addresses do not match or if the record does not exist,
-        # Tell Route 53 to set the DNS record.
         else:
             return_status = route53_client(
                 'set_record',
@@ -216,11 +201,11 @@ def run_set_mode(set_hostname, validation_hash, source_ip, internal_ip):
                 route_53_record_ttl,
                 route_53_record_type,
                 set_ip)
-            return_status = 'success'
-            return_message = 'Your hostname record ' + set_hostname +\
-                ' has been set to ' + set_ip + "."
-            return {'return_status': return_status,
-                    'return_message': return_message}
+            return_message = f'Your hostname record {set_hostname} has been set to {set_ip}.'
+
+        return_status = 'success'
+    return {'return_status': return_status,
+            'return_message': return_message}
 
 
 ''' The function that Lambda executes.
@@ -234,10 +219,6 @@ def lambda_handler(event, context):
     execution_mode = event['execution_mode']
     source_ip = event['source_ip']
     query_string = event['query_string']
-    internal_ip = event['internal_ip']
-    validation_hash = event['validation_hash']
-    set_hostname = event['set_hostname']
-
     # Verify that the execution mode was set correctly.
     execution_modes = ('set', 'get')
     if execution_mode not in execution_modes:
@@ -246,17 +227,11 @@ def lambda_handler(event, context):
         return_dict = {'return_status': return_status,
                        'return_message': return_message}
 
-    # For get mode, reflect the client's public IP address and exit.
     if execution_mode == 'get':
-        return_status = 'success'
-        return_message = source_ip
-        return_dict = {'return_status': return_status,
-                       'return_message': return_message}
+        return {'return_status': 'success', 'return_message': source_ip}
 
-    # Proceed with set mode to create or update the DNS record.
-    else:
-        return_dict = run_set_mode(set_hostname, validation_hash, source_ip, internal_ip)
+    internal_ip = event['internal_ip']
+    validation_hash = event['validation_hash']
+    set_hostname = event['set_hostname']
 
-    # This Lambda function always exits as a success
-    # and passes success or failure information in the json message.
-    return return_dict
+    return run_set_mode(set_hostname, validation_hash, source_ip, internal_ip)
